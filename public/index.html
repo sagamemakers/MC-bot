@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Minecraft Bot Dashboard — control and monitor your bot in real-time">
+  <title>MC Bot Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0e17;
+      --surface: rgba(255,255,255,0.04);
+      --surface-hover: rgba(255,255,255,0.07);
+      --border: rgba(255,255,255,0.06);
+      --border-bright: rgba(255,255,255,0.12);
+      --text: #e2e8f0;
+      --text-dim: #64748b;
+      --accent: #6c63ff;
+      --accent-glow: rgba(108,99,255,0.3);
+      --green: #22c55e;
+      --green-glow: rgba(34,197,94,0.2);
+      --red: #ef4444;
+      --red-glow: rgba(239,68,68,0.2);
+      --yellow: #f59e0b;
+      --health: #ef4444;
+      --food: #f59e0b;
+      --radius: 16px;
+      --radius-sm: 10px;
+    }
+
+    html { font-size: 15px; }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Animated background blobs */
+    body::before, body::after {
+      content: '';
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.15;
+      pointer-events: none;
+      z-index: 0;
+    }
+    body::before {
+      width: 600px; height: 600px;
+      background: var(--accent);
+      top: -200px; left: -100px;
+      animation: float 20s ease-in-out infinite;
+    }
+    body::after {
+      width: 500px; height: 500px;
+      background: #06b6d4;
+      bottom: -150px; right: -100px;
+      animation: float 25s ease-in-out infinite reverse;
+    }
+    @keyframes float {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      33% { transform: translate(80px, -60px) scale(1.1); }
+      66% { transform: translate(-40px, 40px) scale(0.95); }
+    }
+
+    .app {
+      position: relative;
+      z-index: 1;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 3rem;
+    }
+
+    /* Header */
+    .header {
+      text-align: center;
+      margin-bottom: 2.5rem;
+    }
+    .header h1 {
+      font-size: 2.2rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .header p {
+      color: var(--text-dim);
+      margin-top: 0.3rem;
+      font-size: 0.9rem;
+    }
+
+    /* Status badge */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 1rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-top: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      transition: all 0.4s;
+    }
+    .status-badge.online {
+      border-color: rgba(34,197,94,0.3);
+      box-shadow: 0 0 20px var(--green-glow);
+    }
+    .status-badge.offline {
+      border-color: rgba(239,68,68,0.15);
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--red);
+      transition: background 0.4s;
+    }
+    .status-badge.online .status-dot {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { box-shadow: 0 0 4px var(--green); }
+      50% { box-shadow: 0 0 14px var(--green); }
+    }
+
+    /* Layout */
+    .grid {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 1.5rem;
+    }
+    @media (max-width: 800px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      backdrop-filter: blur(20px);
+      transition: border-color 0.3s;
+    }
+    .card:hover { border-color: var(--border-bright); }
+    .card-title {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      margin-bottom: 1.2rem;
+    }
+
+    /* Form */
+    .form-group { margin-bottom: 1rem; }
+    .form-group label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-dim);
+      margin-bottom: 0.35rem;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 0.65rem 0.9rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 0.88rem;
+      outline: none;
+      transition: all 0.25s;
+    }
+    .form-group input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .form-group input::placeholder { color: var(--text-dim); opacity: 0.5; }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    /* Buttons */
+    .btn-row {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1.2rem;
+    }
+    .btn {
+      flex: 1;
+      padding: 0.7rem 1rem;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: 'Inter', sans-serif;
+      font-size: 0.85rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.25s;
+      letter-spacing: 0.02em;
+    }
+    .btn-start {
+      background: linear-gradient(135deg, var(--accent), #8b5cf6);
+      color: #fff;
+      box-shadow: 0 4px 15px var(--accent-glow);
+    }
+    .btn-start:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 25px var(--accent-glow);
+    }
+    .btn-start:active { transform: translateY(0); }
+    .btn-stop {
+      background: rgba(239,68,68,0.12);
+      color: var(--red);
+      border: 1px solid rgba(239,68,68,0.2);
+    }
+    .btn-stop:hover { background: rgba(239,68,68,0.2); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
+
+    /* Stats panel */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-bottom: 1.2rem;
+    }
+    .stat-item {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0.75rem;
+    }
+    .stat-label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      margin-bottom: 0.3rem;
+    }
+    .stat-value {
+      font-size: 1.05rem;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Health / Food bars */
+    .bar-group { margin-bottom: 0.9rem; }
+    .bar-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.35rem;
+    }
+    .bar-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+    }
+    .bar-value {
+      font-size: 0.72rem;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .bar-track {
+      height: 8px;
+      background: rgba(255,255,255,0.04);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+      width: 0%;
+    }
+    .bar-health .bar-fill {
+      background: linear-gradient(90deg, var(--health), #f87171);
+      box-shadow: 0 0 8px var(--red-glow);
+    }
+    .bar-food .bar-fill {
+      background: linear-gradient(90deg, var(--food), #fbbf24);
+      box-shadow: 0 0 8px rgba(245,158,11,0.3);
+    }
+
+    /* Players */
+    .player-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      min-height: 1.6rem;
+    }
+    .player-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.25rem 0.65rem;
+      background: rgba(108,99,255,0.1);
+      border: 1px solid rgba(108,99,255,0.2);
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #a5b4fc;
+      animation: fadeIn 0.3s ease;
+    }
+    .player-tag::before {
+      content: '';
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .no-players { color: var(--text-dim); font-size: 0.8rem; font-style: italic; }
+
+    /* Console / Log */
+    .console-card { display: flex; flex-direction: column; }
+    .console {
+      flex: 1;
+      min-height: 420px;
+      max-height: 520px;
+      overflow-y: auto;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      line-height: 1.7;
+      scroll-behavior: smooth;
+    }
+    .console::-webkit-scrollbar { width: 6px; }
+    .console::-webkit-scrollbar-track { background: transparent; }
+    .console::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.08);
+      border-radius: 999px;
+    }
+    .log-entry {
+      padding: 0.15rem 0;
+      animation: fadeIn 0.25s ease;
+      word-break: break-word;
+    }
+    .log-entry .timestamp { color: var(--text-dim); }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .console-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 0.6rem;
+    }
+    .btn-clear {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      padding: 0.35rem 0.9rem;
+      border-radius: var(--radius-sm);
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: 'Inter', sans-serif;
+      transition: all 0.2s;
+    }
+    .btn-clear:hover {
+      border-color: var(--border-bright);
+      color: var(--text);
+    }
+
+    /* Info row below grid */
+    .info-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+    }
+    .info-chip {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0.65rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .info-chip .ic-icon { font-size: 1.1rem; }
+    .info-chip .ic-label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+    }
+    .info-chip .ic-value {
+      font-size: 0.82rem;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Footer */
+    .footer {
+      text-align: center;
+      margin-top: 3rem;
+      color: var(--text-dim);
+      font-size: 0.72rem;
+      opacity: 0.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <h1>⛏ MC Bot Dashboard</h1>
+      <p>Control &amp; monitor your Minecraft bot in real-time</p>
+      <div class="status-badge offline" id="statusBadge">
+        <span class="status-dot"></span>
+        <span id="statusText">Offline</span>
+      </div>
+    </header>
+
+    <!-- Main Grid -->
+    <div class="grid">
+      <!-- Left Column -->
+      <div class="left-col">
+        <!-- Connection Card -->
+        <div class="card" style="margin-bottom:1.5rem">
+          <div class="card-title">🔗 Connection</div>
+          <div class="form-group">
+            <label for="host">Server IP</label>
+            <input type="text" id="host" placeholder="play.example.com" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="port">Port</label>
+              <input type="number" id="port" placeholder="25565" value="25565" />
+            </div>
+            <div class="form-group">
+              <label for="username">Bot Name</label>
+              <input type="text" id="username" placeholder="Steve" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-start" id="btnStart" onclick="startBot()">▶  Start</button>
+            <button class="btn btn-stop" id="btnStop" onclick="stopBot()" disabled>■  Stop</button>
+          </div>
+        </div>
+
+        <!-- Status Card -->
+        <div class="card">
+          <div class="card-title">📊 Bot Status</div>
+
+          <!-- Health & Food -->
+          <div class="bar-group bar-health">
+            <div class="bar-header">
+              <span class="bar-label">❤️ Health</span>
+              <span class="bar-value" id="healthVal">0 / 20</span>
+            </div>
+            <div class="bar-track"><div class="bar-fill" id="healthBar"></div></div>
+          </div>
+          <div class="bar-group bar-food">
+            <div class="bar-header">
+              <span class="bar-label">🍖 Food</span>
+              <span class="bar-value" id="foodVal">0 / 20</span>
+            </div>
+            <div class="bar-track"><div class="bar-fill" id="foodBar"></div></div>
+          </div>
+
+          <!-- Stats Grid -->
+          <div class="stats-grid">
+            <div class="stat-item">
+              <div class="stat-label">📍 Position</div>
+              <div class="stat-value" id="posVal">—</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">📶 Ping</div>
+              <div class="stat-value" id="pingVal">—</div>
+            </div>
+          </div>
+
+          <!-- Nearby Players -->
+          <div class="card-title" style="margin-bottom:0.6rem">👥 Nearby Players</div>
+          <div class="player-list" id="playerList">
+            <span class="no-players">No players nearby</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column — Console -->
+      <div class="card console-card">
+        <div class="card-title">🖥 Live Console</div>
+        <div class="console" id="console">
+          <div class="log-entry"><span class="timestamp" style="color:var(--accent)">Ready — enter server details and press Start</span></div>
+        </div>
+        <div class="console-actions" style="margin-top: 1rem; gap: 0.5rem; display: flex;">
+          <input type="text" id="cmdInput" placeholder="Send chat or command (e.g. /spawn)..." 
+                 style="flex: 1; padding: 0.5rem 0.8rem; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; outline: none;"
+                 onkeydown="if(event.key==='Enter') sendChat()">
+          <button class="btn-clear" onclick="clearConsole()" style="white-space:nowrap">Clear Console</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Info chips -->
+    <div class="info-row" id="infoRow" style="display:none">
+      <div class="info-chip">
+        <span class="ic-icon">🎮</span>
+        <div>
+          <div class="ic-label">Game Mode</div>
+          <div class="ic-value" id="gameModeVal">—</div>
+        </div>
+      </div>
+      <div class="info-chip">
+        <span class="ic-icon">🌍</span>
+        <div>
+          <div class="ic-label">Dimension</div>
+          <div class="ic-value" id="dimensionVal">—</div>
+        </div>
+      </div>
+      <div class="info-chip">
+        <span class="ic-icon">⚙️</span>
+        <div>
+          <div class="ic-label">Difficulty</div>
+          <div class="ic-value" id="difficultyVal">—</div>
+        </div>
+      </div>
+      <div class="info-chip">
+        <span class="ic-icon">🏷️</span>
+        <div>
+          <div class="ic-label">Server</div>
+          <div class="ic-value" id="serverVal">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">MC Bot Dashboard &bull; Built with Mineflayer + Express</div>
+  </div>
+
+  <script>
+    // --- Elements ---
+    const $ = id => document.getElementById(id)
+    const consoleEl = $('console')
+    const btnStart = $('btnStart')
+    const btnStop = $('btnStop')
+    const badge = $('statusBadge')
+
+    let ws = null
+    let isOnline = false
+
+    // --- WebSocket ---
+    function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+      ws = new WebSocket(`${proto}://${location.host}`)
+
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data)
+        if (msg.type === 'log') addLog(msg.data.message)
+        if (msg.type === 'status') updateStatus(msg.data)
+      }
+
+      ws.onclose = () => {
+        setTimeout(connectWS, 3000)
+      }
+
+      ws.onerror = () => ws.close()
+    }
+
+    connectWS()
+
+    // --- Log ---
+    function addLog(message) {
+      const div = document.createElement('div')
+      div.className = 'log-entry'
+      div.textContent = message
+      consoleEl.appendChild(div)
+      // Keep max 500 lines
+      while (consoleEl.children.length > 500) consoleEl.removeChild(consoleEl.firstChild)
+      consoleEl.scrollTop = consoleEl.scrollHeight
+    }
+
+    function clearConsole() {
+      consoleEl.innerHTML = ''
+    }
+
+    function sendChat() {
+      const input = $('cmdInput')
+      const msg = input.value.trim()
+      if (!msg || !ws || ws.readyState !== 1) return
+      ws.send(JSON.stringify({ type: 'chat', data: { message: msg } }))
+      input.value = ''
+    }
+
+    // --- Status Update ---
+    function updateStatus(s) {
+      isOnline = s.online
+
+      // Badge
+      badge.className = `status-badge ${s.online ? 'online' : 'offline'}`
+      $('statusText').textContent = s.online ? `Online — ${s.username}` : 'Offline'
+
+      // Buttons
+      btnStart.disabled = s.online
+      btnStop.disabled = !s.online
+
+      if (!s.online) {
+        $('healthBar').style.width = '0%'
+        $('foodBar').style.width = '0%'
+        $('healthVal').textContent = '0 / 20'
+        $('foodVal').textContent = '0 / 20'
+        $('posVal').textContent = '—'
+        $('pingVal').textContent = '—'
+        $('playerList').innerHTML = '<span class="no-players">No players nearby</span>'
+        $('infoRow').style.display = 'none'
+        return
+      }
+
+      // Bars
+      const hp = Math.max(0, Math.min(20, s.health || 0))
+      const fd = Math.max(0, Math.min(20, s.food || 0))
+      $('healthBar').style.width = `${(hp / 20) * 100}%`
+      $('foodBar').style.width = `${(fd / 20) * 100}%`
+      $('healthVal').textContent = `${Math.round(hp)} / 20`
+      $('foodVal').textContent = `${Math.round(fd)} / 20`
+
+      // Position
+      if (s.position) {
+        $('posVal').textContent = `${s.position.x}, ${s.position.y}, ${s.position.z}`
+      }
+
+      // Ping
+      $('pingVal').textContent = s.ping ? `${s.ping}ms` : '—'
+
+      // Players
+      const pl = $('playerList')
+      if (s.nearbyPlayers && s.nearbyPlayers.length > 0) {
+        pl.innerHTML = s.nearbyPlayers.map(n =>
+          `<span class="player-tag">${n}</span>`
+        ).join('')
+      } else {
+        pl.innerHTML = '<span class="no-players">No players nearby</span>'
+      }
+
+      // Info chips
+      $('infoRow').style.display = 'grid'
+      $('gameModeVal').textContent = s.gameMode ?? '—'
+      $('dimensionVal').textContent = (s.dimension ?? '—').replace('minecraft:', '')
+      $('difficultyVal').textContent = s.difficulty ?? '—'
+      $('serverVal').textContent = s.serverBrand ?? '—'
+    }
+
+    // --- Actions ---
+    async function startBot() {
+      const host = $('host').value.trim()
+      const port = $('port').value.trim()
+      const username = $('username').value.trim()
+      
+      if (!host) { $('host').focus(); return }
+      if (!username) { $('username').focus(); return }
+
+      // Minecraft username regex: 3-16 chars, alphanumeric and underscore
+      const usernameRegex = /^[a-zA-Z0-9_]{3,16}$/
+      if (!usernameRegex.test(username)) {
+        addLog('❌ Invalid Username: Must be 3-16 characters (letters, numbers, or underscores only, no spaces)')
+        $('username').focus()
+        return
+      }
+
+      btnStart.disabled = true
+      btnStart.textContent = '⏳ Connecting...'
+
+      try {
+        const res = await fetch('/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ host, port: parseInt(port) || 25565, username })
+        })
+        const data = await res.json()
+        addLog(data.message || 'Start request sent')
+      } catch (err) {
+        addLog('❌ Failed to reach server')
+        btnStart.disabled = false
+      }
+      btnStart.textContent = '▶  Start'
+    }
+
+    async function stopBot() {
+      btnStop.disabled = true
+      try {
+        const res = await fetch('/stop', { method: 'POST' })
+        const data = await res.json()
+        addLog(data.message || 'Stop request sent')
+      } catch (err) {
+        addLog('❌ Failed to reach server')
+      }
+    }
+  </script>
+</body>
+</html>
