@@ -2,6 +2,8 @@ const express = require('express')
 const http = require('http')
 const { WebSocketServer } = require('ws')
 const BotManager = require('./bot')
+const fs = require('fs')
+const path = require('path')
 
 const app = express()
 const server = http.createServer(app)
@@ -10,7 +12,22 @@ const wss = new WebSocketServer({ server })
 app.use(express.json())
 app.use(express.static('public'))
 
+const CONFIG_FILE = path.join(__dirname, 'bot-config.json')
 const bot = new BotManager()
+
+// --- Auto-start logic ---
+function loadConfig() {
+  if (fs.existsSync(CONFIG_FILE)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(CONFIG_FILE))
+      console.log('🤖 Auto-starting bot with saved config...')
+      bot.start(config)
+    } catch (err) {
+      console.error('❌ Error loading bot-config.json:', err.message)
+    }
+  }
+}
+loadConfig()
 
 // --- Broadcast to all WebSocket clients ---
 function broadcast(type, data) {
@@ -30,13 +47,16 @@ app.post('/start', (req, res) => {
   if (!host || !username) {
     return res.status(400).json({ error: 'host and username are required' })
   }
-  bot.start({ host, port: port || 25565, username })
-  res.json({ success: true, message: 'Bot starting...' })
+  const config = { host, port: port || 25565, username }
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config))
+  bot.start(config)
+  res.json({ success: true, message: 'Bot starting and config saved for persistence...' })
 })
 
 app.post('/stop', (req, res) => {
+  if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE)
   bot.stop()
-  res.json({ success: true, message: 'Bot stopped.' })
+  res.json({ success: true, message: 'Bot stopped and persistence cleared.' })
 })
 
 app.get('/status', (req, res) => {

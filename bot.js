@@ -212,15 +212,16 @@ class BotManager extends EventEmitter {
   }
 
   _scheduleReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.log(`❌ Max reconnect attempts reached (${this.maxReconnectAttempts}). Giving up.`)
-      this.emit('status', this.getStatus())
-      return
-    }
     this.reconnectAttempts++
     // Exponential backoff: 5s, 10s, 20s, 40s... capped at 120s
     const delay = Math.min(5000 * Math.pow(2, this.reconnectAttempts - 1), 120000)
-    this.log(`🔄 Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`)
+    this.log(`🔄 Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts})...`)
+    
+    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout)
+    this.reconnectTimeout = setTimeout(() => {
+      this.log('🔄 Attempting to reconnect...')
+      this._createBot()
+    }, delay)
   }
 
   async _loop() {
