@@ -81,9 +81,17 @@ wss.on('connection', (ws) => {
   ws.on('close', () => console.log('Dashboard client disconnected'))
 })
 
+process.on('uncaughtException', (err) => {
+  console.error('🔥 UNCAUGHT EXCEPTION:', err.message)
+})
+
+process.on('unhandledRejection', (reason) => {
+  console.error('🔥 UNHANDLED REJECTION:', reason)
+})
+
 // --- Start server ---
 const PORT = process.env.PORT || 3000
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  🎮 Minecraft Bot Dashboard`)
   console.log(`  ➜ http://localhost:${PORT}\n`)
 })

@@ -7,13 +7,13 @@ class BotManager extends EventEmitter {
   constructor() {
     super()
     this.bot = null
-    this.running = false
+    this.shouldBeRunning = false // Tracks if the user wants the bot to be active
+    this.connected = false // Tracks if the bot is currently in-game
     this.config = null
     this.reconnectAttempts = 0
-    this.maxReconnectAttempts = 10
-    this.loopTimeout = null
     this.reconnectTimeout = null
-    this.targetPlayer = null // Username of the player to hunt
+    this.loopTimeout = null
+    this.targetPlayer = null 
   }
 
   log(msg) {
@@ -24,8 +24,8 @@ class BotManager extends EventEmitter {
   }
 
   getStatus() {
-    if (!this.bot || !this.running) {
-      return { online: false }
+    if (!this.bot || !this.connected) {
+      return { online: false, status: this.shouldBeRunning ? 'Reconnecting...' : 'Stopped' }
     }
     const b = this.bot
     const players = Object.values(b.players || {})
@@ -52,18 +52,16 @@ class BotManager extends EventEmitter {
   }
 
   start(config) {
-    if (this.running) {
-      this.log('⚠ Bot is already running. Stop it first.')
-      return
-    }
     this.config = config
+    this.shouldBeRunning = true
     this.reconnectAttempts = 0
     this._createBot()
   }
 
   stop() {
     this.log('🛑 Stopping bot...')
-    this.running = false
+    this.shouldBeRunning = false
+    this.connected = false
     if (this.loopTimeout) clearTimeout(this.loopTimeout)
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout)
     if (this.bot) {
@@ -75,82 +73,61 @@ class BotManager extends EventEmitter {
   }
 
   _createBot() {
+    if (!this.shouldBeRunning) return
+    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout)
+
     const { host, port, username } = this.config
     this.log(`🔗 Connecting to ${host}:${port} as "${username}"...`)
 
     try {
+      if (this.bot) {
+        try { this.bot.quit() } catch (_) {}
+      }
+
       this.bot = mineflayer.createBot({
         host,
         port: parseInt(port) || 25565,
         username,
         auth: 'offline',
-        hideErrors: false
+        hideErrors: true,
+        plugins: [pathfinder, pvp]
       })
     } catch (err) {
-      this.log(`❌ Failed to create bot: ${err.message}`)
+      this.log(`❌ Creation failed: ${err.message}`)
       this._scheduleReconnect()
       return
     }
 
-    // Load plugins
-    this.bot.loadPlugin(pathfinder)
-    this.bot.loadPlugin(pvp)
-
     this.bot.once('spawn', () => {
-      this.running = true
+      this.connected = true
       this.reconnectAttempts = 0
       this.log(`✅ Bot joined the server!`)
       this.log(`📍 Position: ${this._posStr()}`)
-      this.log(`❤️  Health: ${this.bot.health} | 🍖 Food: ${this.bot.food}`)
       this.emit('status', this.getStatus())
-      this.loopTimeout = setTimeout(() => this._loop(), 3000)
+      
+      // Start the main loop
+      if (this.loopTimeout) clearTimeout(this.loopTimeout)
+      this._loop()
     })
 
-    this.bot.on('health', () => {
-      this.emit('status', this.getStatus())
-    })
-
-    this.bot.on('playerJoined', (player) => {
-      this.log(`👤 Player joined: ${player.username}`)
-      this.emit('status', this.getStatus())
-    })
-
-    this.bot.on('playerLeft', (player) => {
-      this.log(`👤 Player left: ${player.username}`)
-      this.emit('status', this.getStatus())
-    })
-
+    this.bot.on('health', () => this.emit('status', this.getStatus()))
 
     this.bot.on('kicked', (reason) => {
-      const msg = typeof reason === 'string' ? reason : JSON.stringify(reason)
-      this.log(`🚫 Kicked: ${msg}`)
-      this.running = false
-      
-      const permanentErrors = [
-        'Invalid characters in username',
-        'is not white-listed',
-        'Banned from this server',
-        'The server is full'
-      ]
-
-      if (permanentErrors.some(err => msg.includes(err))) {
-        this.log('🛑 Permanent error detected. Stopping bot.')
-        this.stop()
-      } else {
-        this._scheduleReconnect()
-      }
+      const msg = typeof reason === 'object' ? JSON.stringify(reason) : reason
+      this.log(`🚫 Kicked from server: ${msg}`)
+      this.connected = false
+      this._scheduleReconnect()
     })
 
     this.bot.on('error', (err) => {
       this.log(`❌ Error: ${err.message}`)
+      if (!this.connected) this._scheduleReconnect()
     })
 
     this.bot.on('end', (reason) => {
-      if (this.running) {
-        this.log(`🔌 Disconnected: ${reason || 'unknown'}`)
-        this.running = false
-        this._scheduleReconnect()
-      }
+      this.log(`🔌 Disconnected (end): ${reason || 'unknown'}`)
+      this.connected = false
+      this._scheduleReconnect()
     })
 
     this.bot.on('chat', (username, message) => {
@@ -159,50 +136,40 @@ class BotManager extends EventEmitter {
       }
     })
 
-    // --- Revenge/Stalker Logic ---
+    // --- Revenge Logic ---
     this.bot.on('entityHurt', (entity) => {
       if (entity !== this.bot.entity) return
-
-      // Look for the attacker
       const attacker = this.bot.nearestEntity(e => 
-        e.type === 'player' && 
-        e.username !== this.bot.username &&
+        e.type === 'player' && e.username !== this.bot.username &&
         this.bot.entity.position.distanceTo(e.position) < 10
       )
-
-      if (attacker && attacker.username) {
-        if (this.targetPlayer !== attacker.username) {
-          this.targetPlayer = attacker.username
-          this.log(`🎯 TARGET ACQUIRED: ${attacker.username}. I will hunt him down.`)
-          this.bot.chat(`I see you, ${attacker.username}. You'll regret that.`)
-          // Trigger loop immediately to start the hunt
-          if (this.loopTimeout) clearTimeout(this.loopTimeout)
-          this._loop()
-        }
+      if (attacker && attacker.username && this.targetPlayer !== attacker.username) {
+        this.targetPlayer = attacker.username
+        this.log(`🎯 TARGET ACQUIRED: ${attacker.username}. Hunting...`)
+        this.bot.chat(`I see you, ${attacker.username}. You'll regret that.`)
       }
-    })
-
-    this.bot.on('playerLeft', (player) => {
-      this.log(`👤 Player left: ${player.username}`)
-      if (this.targetPlayer === player.username) {
-        this.log(`🕵️ Target ${player.username} left. Waiting for them to return...`)
-      }
-      this.emit('status', this.getStatus())
     })
 
     this.bot.on('death', () => {
-      this.log('💀 Bot died! Waiting to respawn...')
-      if (this.targetPlayer) {
-        this.log(`🏹 Still haunting ${this.targetPlayer}... will resume after respawn.`)
-      }
-      this.bot.pvp.stop() // Stop pvp logic on death
+      this.log('💀 Bot died! Waiting for respawn...')
+      this.bot.pvp.stop()
     })
   }
 
-  chat(message) {
-    if (!this.bot || !this.running) return
-    this.log(`📤 Sending: ${message}`)
-    this.bot.chat(message)
+  _scheduleReconnect() {
+    if (!this.shouldBeRunning) return
+    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout)
+
+    this.reconnectAttempts++
+    // Delay: starts at 5s, doubles up to 60s
+    const delay = Math.min(5000 * Math.pow(2, Math.min(this.reconnectAttempts - 1, 4)), 60000)
+    
+    this.log(`🔄 Reconnect attempt ${this.reconnectAttempts} in ${delay/1000}s...`)
+    this.reconnectTimeout = setTimeout(() => {
+      if (this.shouldBeRunning && !this.connected) {
+        this._createBot()
+      }
+    }, delay)
   }
 
   _posStr() {
@@ -211,21 +178,8 @@ class BotManager extends EventEmitter {
     return `${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}`
   }
 
-  _scheduleReconnect() {
-    this.reconnectAttempts++
-    // Exponential backoff: 5s, 10s, 20s, 40s... capped at 120s
-    const delay = Math.min(5000 * Math.pow(2, this.reconnectAttempts - 1), 120000)
-    this.log(`🔄 Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts})...`)
-    
-    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout)
-    this.reconnectTimeout = setTimeout(() => {
-      this.log('🔄 Attempting to reconnect...')
-      this._createBot()
-    }, delay)
-  }
-
   async _loop() {
-    if (!this.running || !this.bot) return
+    if (!this.shouldBeRunning || !this.connected || !this.bot) return
 
     try {
       // --- STALKER LOGIC OVERRIDE ---
@@ -316,10 +270,26 @@ class BotManager extends EventEmitter {
         this.bot.clearControlStates()
 
       } else {
-        // Idle break — stand still
+        // Active Idle — stand still but mimic life
         const idleTime = this._rand(5000, 20000)
-        this.log(`😴 Idle break (${Math.round(idleTime / 1000)}s)`)
-        await this._sleep(idleTime)
+        this.log(`😴 Active idle (${Math.round(idleTime / 1000)}s)...`)
+        
+        // Split idle into chunks to perform tiny actions
+        const chunks = Math.floor(idleTime / 2000)
+        for(let i=0; i<chunks; i++) {
+          if(!this.connected) break
+          // Small look adjustment
+          if(Math.random() < 0.3) {
+            this.bot.look(
+              this.bot.entity.yaw + (Math.random() - 0.5) * 0.2,
+              this.bot.entity.pitch + (Math.random() - 0.5) * 0.2,
+              true
+            )
+          }
+          // Arm swing
+          if(Math.random() < 0.2) this.bot.swingArm('right')
+          await this._sleep(2000)
+        }
       }
 
       // Emit status after every action
@@ -329,9 +299,15 @@ class BotManager extends EventEmitter {
       this.log(`⚠ Loop error: ${err.message}`)
     }
 
-    if (this.running) {
+    if (this.shouldBeRunning && this.connected) {
       this.loopTimeout = setTimeout(() => this._loop(), this._rand(1000, 4000))
     }
+  }
+
+  chat(message) {
+    if (!this.bot || !this.connected) return
+    this.log(`📤 Sending: ${message}`)
+    this.bot.chat(message)
   }
 
   _sleep(ms) {
