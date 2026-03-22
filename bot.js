@@ -100,7 +100,32 @@ class BotManager extends EventEmitter {
       return
     }
 
+    this.bot.on('error', (err) => {
+      this.log(`❌ Error: ${err.message}`)
+      // If it fails to even connect, try again
+      if (!this.connected) {
+        this.log('🔄 Connection failed. Retrying...')
+        this._scheduleReconnect()
+      }
+    })
+
+    this.bot.on('end', (reason) => {
+      this.log(`🔌 Ended: ${reason || 'unknown'}`)
+      this.connected = false
+      this._scheduleReconnect()
+    })
+
+    // Safety timeout: If it doesn't spawn in 2 minutes, try again
+    const spawnTimeout = setTimeout(() => {
+      if (!this.connected && this.shouldBeRunning) {
+        this.log('🕙 Spawn timeout (2m). Retrying connection...')
+        if (this.bot) this.bot.quit()
+        this._scheduleReconnect()
+      }
+    }, 120000)
+
     this.bot.once('spawn', () => {
+      clearTimeout(spawnTimeout)
       this.connected = true
       this.reconnectAttempts = 0
       this.log(`✅ Bot joined! Server: ${this.bot.game?.serverBrand || 'vanilla'}`)
@@ -114,16 +139,6 @@ class BotManager extends EventEmitter {
 
     this.bot.on('kicked', (reason) => {
       this.log(`🚫 Kicked: ${typeof reason === 'object' ? JSON.stringify(reason) : reason}`)
-      this.connected = false
-      this._scheduleReconnect()
-    })
-
-    this.bot.on('error', (err) => {
-      this.log(`❌ Error: ${err.message}`)
-    })
-
-    this.bot.on('end', (reason) => {
-      this.log(`🔌 Ended: ${reason || 'unknown'}`)
       this.connected = false
       this._scheduleReconnect()
     })
