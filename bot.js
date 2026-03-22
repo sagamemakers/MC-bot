@@ -81,6 +81,7 @@ class BotManager extends EventEmitter {
 
     try {
       if (this.bot) {
+        this.bot.removeAllListeners()
         try { this.bot.quit() } catch (_) {}
       }
 
@@ -90,7 +91,8 @@ class BotManager extends EventEmitter {
         username,
         auth: 'offline',
         hideErrors: true,
-        plugins: [pathfinder, pvp]
+        plugins: [pathfinder, pvp],
+        checkTimeoutInterval: 45000 // Detect silent timeouts faster (45s)
       })
     } catch (err) {
       this.log(`❌ Creation failed: ${err.message}`)
@@ -101,11 +103,9 @@ class BotManager extends EventEmitter {
     this.bot.once('spawn', () => {
       this.connected = true
       this.reconnectAttempts = 0
-      this.log(`✅ Bot joined the server!`)
+      this.log(`✅ Bot joined! Server: ${this.bot.game?.serverBrand || 'vanilla'}`)
       this.log(`📍 Position: ${this._posStr()}`)
       this.emit('status', this.getStatus())
-      
-      // Start the main loop
       if (this.loopTimeout) clearTimeout(this.loopTimeout)
       this._loop()
     })
@@ -113,21 +113,24 @@ class BotManager extends EventEmitter {
     this.bot.on('health', () => this.emit('status', this.getStatus()))
 
     this.bot.on('kicked', (reason) => {
-      const msg = typeof reason === 'object' ? JSON.stringify(reason) : reason
-      this.log(`🚫 Kicked from server: ${msg}`)
+      this.log(`🚫 Kicked: ${typeof reason === 'object' ? JSON.stringify(reason) : reason}`)
       this.connected = false
       this._scheduleReconnect()
     })
 
     this.bot.on('error', (err) => {
       this.log(`❌ Error: ${err.message}`)
-      if (!this.connected) this._scheduleReconnect()
     })
 
     this.bot.on('end', (reason) => {
-      this.log(`🔌 Disconnected (end): ${reason || 'unknown'}`)
+      this.log(`🔌 Ended: ${reason || 'unknown'}`)
       this.connected = false
       this._scheduleReconnect()
+    })
+
+    this.bot.on('death', () => {
+      this.log('💀 Died. Respawning...')
+      this.bot.pvp.stop()
     })
 
     this.bot.on('chat', (username, message) => {
@@ -136,7 +139,6 @@ class BotManager extends EventEmitter {
       }
     })
 
-    // --- Revenge Logic ---
     this.bot.on('entityHurt', (entity) => {
       if (entity !== this.bot.entity) return
       const attacker = this.bot.nearestEntity(e => 
@@ -148,11 +150,6 @@ class BotManager extends EventEmitter {
         this.log(`🎯 TARGET ACQUIRED: ${attacker.username}. Hunting...`)
         this.bot.chat(`I see you, ${attacker.username}. You'll regret that.`)
       }
-    })
-
-    this.bot.on('death', () => {
-      this.log('💀 Bot died! Waiting for respawn...')
-      this.bot.pvp.stop()
     })
   }
 
@@ -187,112 +184,81 @@ class BotManager extends EventEmitter {
         const target = this.bot.players[this.targetPlayer]?.entity
         if (target) {
           this.log(`🏹 Hunting ${this.targetPlayer}...`)
-          
-          // Set movements for pathfinding
           const defaultMove = new Movements(this.bot)
           this.bot.pathfinder.setMovements(defaultMove)
-
-          // Start PVP attack
           this.bot.pvp.attack(target)
-          
-          // Pathfinder to stay close
-          const goal = new goals.GoalFollow(target, 2)
-          this.bot.pathfinder.setGoal(goal, true)
-
-          // Loop faster while hunting
+          this.bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true)
           this.loopTimeout = setTimeout(() => this._loop(), 500)
           return
         } else {
-          // Target is not in render distance or offline
           this.log(`🔍 Searching for ${this.targetPlayer}... (not in sight)`)
           this.bot.pvp.stop()
         }
       }
 
-      // Check nearby players — go idle to be less suspicious
-      const nearbyEntities = Object.values(this.bot.players)
-        .filter(p => p.entity && p.username !== this.bot.username)
-      if (nearbyEntities.length > 0) {
-        this.log(`👀 ${nearbyEntities.length} player(s) nearby → idling`)
-        this.loopTimeout = setTimeout(() => this._loop(), this._rand(6000, 12000))
-        return
-      }
-
+      // --- RANDOM ACTION SELECTION ---
       const action = Math.random()
 
-      if (action < 0.30) {
-        // Look around randomly
-        this.bot.look(
-          Math.random() * Math.PI * 2,
-          (Math.random() * Math.PI) - (Math.PI / 2),
-          true
-        )
-        this.log('👁️  Looking around')
-        await this._sleep(this._rand(800, 2000))
+      if (action < 0.15) {
+        // --- ACTIVE MOVEMENT (Best for Anti-AFK) ---
+        const x = (Math.random() - 0.5) * 10
+        const z = (Math.random() - 0.5) * 10
+        const goalPos = this.bot.entity.position.offset(x, 0, z)
+        this.log(`🚶 Relocating to ensure activity...`)
+        
+        const defaultMove = new Movements(this.bot)
+        this.bot.pathfinder.setMovements(defaultMove)
+        try {
+          await this.bot.pathfinder.goto(new goals.GoalNear(goalPos.x, goalPos.y, goalPos.z, 1))
+        } catch (err) {}
+
+      } else if (action < 0.35) {
+        // --- LOOK AROUND ---
+        this.bot.look(Math.random() * Math.PI * 2, (Math.random() * Math.PI) - (Math.PI / 2), true)
+        this.log('👁️  Scanning environment')
+        await this._sleep(this._rand(1000, 3000))
+
+      } else if (action < 0.45) {
+        // --- TAB COMPLETE HEARTBEAT (Bypasses some bot detectors) ---
+        try {
+          const players = Object.keys(this.bot.players)
+          const randomPlayer = players[Math.floor(Math.random() * players.length)]
+          if (randomPlayer) {
+            this.log(`📡 Sending heartbeat signal...`)
+            await this.bot.tabComplete(randomPlayer)
+          }
+        } catch (err) {}
 
       } else if (action < 0.55) {
-        // Walk in a random direction
-        const yaw = Math.random() * Math.PI * 2
-        this.bot.look(yaw, 0, true)
-        this.bot.setControlState('forward', true)
-        if (Math.random() < 0.2) {
-          this.bot.setControlState('sprint', true)
-          this.log('🏃 Sprinting')
-        } else {
-          this.log('🚶 Walking')
-        }
-        await this._sleep(this._rand(1500, 4000))
-        this.bot.clearControlStates()
-
-      } else if (action < 0.70) {
-        // Mine the block below
-        const block = this.bot.blockAt(this.bot.entity.position.offset(0, -1, 0))
-        if (block && this.bot.canDigBlock(block)) {
-          this.log(`⛏️  Mining ${block.name}`)
-          await this.bot.dig(block)
-        } else {
-          this.log('⛏️  Nothing to mine here')
-        }
-
-      } else if (action < 0.80) {
-        // Jump
+        // --- SWING & JUMP ---
+        this.log('🦘 Testing reflexes')
         this.bot.setControlState('jump', true)
-        this.log('🦘 Jumping')
-        await this._sleep(500)
+        this.bot.swingArm('right')
+        await this._sleep(400)
         this.bot.setControlState('jump', false)
 
-      } else if (action < 0.88) {
-        // Sneak for a bit
-        this.bot.setControlState('sneak', true)
-        this.bot.setControlState('forward', true)
-        this.log('🥷 Sneaking')
-        await this._sleep(this._rand(2000, 5000))
-        this.bot.clearControlStates()
+      } else if (action < 0.60 && Math.random() < 0.1) {
+        // --- PERIODIC KEEP-ALIVE CHAT (Rare) ---
+        const messages = ["", "...", ".", "hey", "sup", "yo"]
+        const msg = messages[Math.floor(Math.random() * messages.length)]
+        if (msg) {
+          this.log(`💬 Anti-AFK Chat: ${msg}`)
+          this.bot.chat(msg)
+        }
 
       } else {
-        // Active Idle — stand still but mimic life
-        const idleTime = this._rand(5000, 20000)
-        this.log(`😴 Active idle (${Math.round(idleTime / 1000)}s)...`)
+        // --- MICRO-IDLE ---
+        const idleTime = this._rand(5000, 15000)
+        this.log(`😴 Micro-nap (${Math.round(idleTime / 1000)}s)`)
         
-        // Split idle into chunks to perform tiny actions
         const chunks = Math.floor(idleTime / 2000)
         for(let i=0; i<chunks; i++) {
           if(!this.connected) break
-          // Small look adjustment
-          if(Math.random() < 0.3) {
-            this.bot.look(
-              this.bot.entity.yaw + (Math.random() - 0.5) * 0.2,
-              this.bot.entity.pitch + (Math.random() - 0.5) * 0.2,
-              true
-            )
-          }
-          // Arm swing
           if(Math.random() < 0.2) this.bot.swingArm('right')
           await this._sleep(2000)
         }
       }
 
-      // Emit status after every action
       this.emit('status', this.getStatus())
 
     } catch (err) {
@@ -300,7 +266,7 @@ class BotManager extends EventEmitter {
     }
 
     if (this.shouldBeRunning && this.connected) {
-      this.loopTimeout = setTimeout(() => this._loop(), this._rand(1000, 4000))
+      this.loopTimeout = setTimeout(() => this._loop(), this._rand(2000, 5000))
     }
   }
 
